@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="480" viewBox="0 0 1280 480" role="img" aria-labelledby="t d">
+  <title id="t">mailgate</title>
+  <desc id="d">An AI agent pauses a run, e-mails the approver, and resumes when the reply arrives. PostgreSQL holds the state, so the pause survives restarts.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#55606e"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #1a1a1a; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .muted { fill: #55606e; }
+    .accent { fill: #1d4ed8; }
+    .box { fill: #ffffff; stroke: #d1d5db; stroke-width: 1.5; }
+    .box-accent { fill: #eef2ff; stroke: #c7d2fe; stroke-width: 1.5; }
+    .line { stroke: #55606e; stroke-width: 1.75; fill: none; }
+    .dash { stroke: #9ca3af; stroke-width: 1.5; stroke-dasharray: 4 5; fill: none; }
+  </style>
+
+  <rect width="1280" height="480" rx="20" fill="#f8fafc"/>
+  <rect x="0.75" y="0.75" width="1278.5" height="478.5" rx="20" fill="none" stroke="#e5e7eb" stroke-width="1.5"/>
+
+  <!-- title -->
+  <text x="64" y="104" font-size="52" font-weight="700" letter-spacing="-1">mailgate</text>
+  <text x="64" y="146" font-size="22" class="muted">Durable human-in-the-loop for AI agents, by e-mail.</text>
+
+  <!-- step 1: agent pauses -->
+  <rect class="box" x="64" y="200" width="248" height="120" rx="12"/>
+  <text x="88" y="236" font-size="13" class="muted mono">01 · AGENT</text>
+  <text x="88" y="268" font-size="20" font-weight="600">Run pauses</text>
+  <text x="88" y="296" font-size="15" class="muted mono">WAITING_APPROVAL</text>
+
+  <!-- step 2: approval e-mail -->
+  <rect class="box-accent" x="370" y="200" width="248" height="120" rx="12"/>
+  <text x="394" y="236" font-size="13" class="muted mono">02 · OUTBOX</text>
+  <text x="394" y="268" font-size="20" font-weight="600">E-mail to approver</text>
+  <text x="394" y="296" font-size="17" font-weight="700" class="accent">R$ 840,00</text>
+
+  <!-- step 3: human reply -->
+  <rect class="box" x="676" y="200" width="248" height="120" rx="12"/>
+  <text x="700" y="236" font-size="13" class="muted mono">03 · WEBHOOK</text>
+  <text x="700" y="268" font-size="20" font-weight="600">Reply, any wording</text>
+  <text x="700" y="296" font-size="16" class="muted">“pode aprovar”</text>
+
+  <!-- step 4: resume -->
+  <rect class="box" x="982" y="200" width="234" height="120" rx="12"/>
+  <text x="1006" y="236" font-size="13" class="muted mono">04 · WORKER</text>
+  <text x="1006" y="268" font-size="20" font-weight="600">Run resumes</text>
+  <text x="1006" y="296" font-size="15" class="muted mono">COMPLETED</text>
+
+  <!-- arrows between steps -->
+  <line class="line" x1="316" y1="260" x2="364" y2="260" marker-end="url(#arrow)"/>
+  <line class="line" x1="622" y1="260" x2="670" y2="260" marker-end="url(#arrow)"/>
+  <line class="line" x1="928" y1="260" x2="976" y2="260" marker-end="url(#arrow)"/>
+
+  <!-- state lives in postgres -->
+  <line class="dash" x1="188" y1="320" x2="188" y2="370"/>
+  <line class="dash" x1="494" y1="320" x2="494" y2="370"/>
+  <line class="dash" x1="800" y1="320" x2="800" y2="370"/>
+  <line class="dash" x1="1099" y1="320" x2="1099" y2="370"/>
+  <rect x="64" y="370" width="1152" height="56" rx="12" fill="#1a1a1a"/>
+  <text x="88" y="404" font-size="16" font-weight="600" style="fill:#ffffff">PostgreSQL</text>
+  <text x="196" y="404" font-size="15" style="fill:#d1d5db">state, queue and dedupe in one place · hours between steps · survives restarts · no worker held while waiting</text>
+</svg>
