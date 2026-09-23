@@ -1,0 +1,21 @@
+Assunto: [mailgate #k7q2m4xa] Reembolso de R$ 840,00 — aprovação necessária
+
+Olá,
+
+Um pedido de reembolso precisa da sua aprovação.
+
+Descrição: Hotel em São Paulo (2 diárias) para visita ao cliente Beta
+Categoria: Viagem
+Valor: R$ 840,00
+Solicitante: ana@acme.test
+
+Resumo do agente:
+Duas diárias de hotel em SP para reunião presencial com o cliente Beta, com nota fiscal anexada.
+
+Recomendação do agente: APROVAR
+Justificativa: Valor dentro da média de hospedagem para a cidade e viagem justificada por reunião de contrato.
+
+Responda este e-mail com APROVO ou RECUSO (pode incluir um comentário).
+Prazo para resposta: 25/09/2026, 14:30 (horário de Brasília). Sem resposta até lá, o pedido expira.
+
+— mailgate

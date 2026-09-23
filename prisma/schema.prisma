@@ -1,0 +1,94 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Run {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  status     String
+  input      Json
+  messages   Json      @default("[]")
+  attempts   Int       @default(0)
+  leaseToken String?   @map("lease_token") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(3)
+  lastError  String?   @map("last_error")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  events     RunEvent[]
+  approvals  ApprovalRequest[]
+  actions    Action[]
+
+  @@map("runs")
+}
+
+model RunEvent {
+  id    BigInt   @id @default(autoincrement())
+  runId String   @map("run_id") @db.Uuid
+  at    DateTime @default(now()) @db.Timestamptz(3)
+  type  String
+  data  Json     @default("{}")
+  run   Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, at])
+  @@map("run_events")
+}
+
+model ApprovalRequest {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId             String    @map("run_id") @db.Uuid
+  toolUseId         String    @map("tool_use_id")
+  approverEmail     String    @map("approver_email")
+  subjectToken      String    @unique @map("subject_token")
+  summary           String
+  recommendation    String
+  rationale         String
+  status            String
+  decision          String?
+  decisionNote      String?   @map("decision_note")
+  decisionRawText   String?   @map("decision_raw_text")
+  providerMessageId String?   @map("provider_message_id")
+  providerThreadId  String?   @map("provider_thread_id")
+  clarificationSent Boolean   @default(false) @map("clarification_sent")
+  lastError         String?   @map("last_error")
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  run               Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, toolUseId])
+  @@index([providerThreadId])
+  @@map("approval_requests")
+}
+
+model Action {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId     String   @map("run_id") @db.Uuid
+  toolUseId String   @map("tool_use_id")
+  type      String
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  run       Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, toolUseId])
+  @@map("actions")
+}
+
+model InboundEvent {
+  providerEventId   String    @id @map("provider_event_id")
+  receivedAt        DateTime  @default(now()) @map("received_at") @db.Timestamptz(3)
+  payload           Json
+  outcome           String?
+  approvalRequestId String?   @map("approval_request_id") @db.Uuid
+  classification    String?
+  attempts          Int       @default(0)
+  leaseUntil        DateTime? @map("lease_until") @db.Timestamptz(3)
+  lastError         String?   @map("last_error")
+  processedAt       DateTime? @map("processed_at") @db.Timestamptz(3)
+
+  @@map("inbound_events")
+}

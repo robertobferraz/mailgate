@@ -1,0 +1,6 @@
+# 0005 — svix Webhook.verify returns no body; the fake hid it
+date:  2026-09-23
+what broke: in the F4 manual E2E, a real AgentMail reply reached POST /webhooks/mail with a valid signature and got 200 `{ stored: false }`. The approver's reply was dropped silently.
+why:   in svix 2.5.0, `Webhook.verify` only verifies (it calls the inner verifier with `jsonParse: false`) and returns `undefined`. `AgentMailProvider.parseInbound` used the return value as the body, so every event normalized to type `''` and was skipped as "not message.received". The unit test only asserted `eventId`, and every other test went through `FakeMailProvider`, which parses JSON itself. So no test ran the real adapter end to end.
+how to avoid: never rely on a library's return value without a test that asserts it. Every provider adapter needs a unit test that feeds it a payload in the provider's real shape (signed locally when a signature is involved) and asserts the normalized fields, not just the id. When a fake reimplements a step (parsing, signing), that step still needs a test on the real adapter.
+cost:  the first real reply was lost (AgentMail had its 200; the replay failed the 5-minute signature tolerance) and the user had to reply again; about 15 minutes of debugging in w6.

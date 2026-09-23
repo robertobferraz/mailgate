@@ -1,0 +1,110 @@
+openapi: 3.1.0
+info:
+  title: mailgate
+  version: 0.1.0
+  description: Durable human-in-the-loop for AI agents via e-mail. Reimbursement demo.
+  license: { name: MIT, identifier: MIT }
+servers:
+  - url: http://localhost:3000
+security: []
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Liveness plus database check
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, required: [status], properties: { status: { const: ok } } } } } }
+        '503': { description: Database unavailable }
+  /runs:
+    post:
+      operationId: createRun
+      summary: Create a reimbursement run (starts PENDING)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReimbursementInput' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { type: object, required: [id, status], properties: { id: { type: string, format: uuid }, status: { const: PENDING } } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+  /runs/{id}:
+    get:
+      operationId: getRun
+      summary: Run status, approval, action and timeline
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RunView' } } } }
+        '400': { description: Id is not a UUID }
+        '404': { description: Not found }
+  /webhooks/mail:
+    post:
+      operationId: mailWebhook
+      summary: AgentMail webhook (Svix-signed). Stores message.received events; never decides inline.
+      parameters:
+        - { name: svix-id, in: header, required: true, schema: { type: string } }
+        - { name: svix-timestamp, in: header, required: true, schema: { type: string } }
+        - { name: svix-signature, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: Accepted (also for duplicates and ignored event types)
+          content: { application/json: { schema: { type: object, required: [received, stored], properties: { received: { const: true }, stored: { type: boolean } } } } }
+        '401': { description: Invalid or missing signature; nothing stored }
+components:
+  schemas:
+    Category: { type: string, enum: [TRAVEL, MEALS, EQUIPMENT, TRAINING, OTHER] }
+    ReimbursementInput:
+      type: object
+      additionalProperties: false
+      required: [description, amountCents, category, requesterEmail, approverEmail]
+      properties:
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        amountCents: { type: integer, minimum: 1, maximum: 100000000, description: 'BRL cents; 50000 = R$ 500,00' }
+        category: { $ref: '#/components/schemas/Category' }
+        requesterEmail: { type: string, format: email }
+        approverEmail: { type: string, format: email }
+      example: { description: Hotel em SP para visita a cliente, amountCents: 84000, category: TRAVEL, requesterEmail: ana@acme.test, approverEmail: gestor@acme.test }
+    RunStatus: { type: string, enum: [PENDING, RUNNING, WAITING_APPROVAL, COMPLETED, FAILED, EXPIRED] }
+    RunView:
+      type: object
+      required: [id, status, input, attempts, lastError, approval, action, timeline]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        input: { $ref: '#/components/schemas/ReimbursementInput' }
+        attempts: { type: integer }
+        lastError: { type: [string, 'null'] }
+        approval:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [status, decision, note, expiresAt]
+              properties:
+                status: { type: string, enum: [CREATED, SENT, DECIDED, EXPIRED] }
+                decision: { type: [string, 'null'], enum: [APPROVED, REJECTED, null] }
+                note: { type: [string, 'null'] }
+                expiresAt: { type: string, format: date-time }
+        action:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [type, payload, createdAt]
+              properties:
+                type: { type: string, enum: [REIMBURSEMENT_APPROVED, REIMBURSEMENT_REJECTED] }
+                payload: { type: object }
+                createdAt: { type: string, format: date-time }
+        timeline:
+          type: array
+          items:
+            type: object
+            required: [at, type, data]
+            properties: { at: { type: string, format: date-time }, type: { type: string }, data: { type: object } }
+    ValidationError:
+      type: object
+      required: [message, errors]
+      properties:
+        message: { type: string }
+        errors: { type: array, items: { type: object, required: [path, message], properties: { path: { type: string }, message: { type: string } } } }
