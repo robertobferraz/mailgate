@@ -12,5 +12,7 @@ export function createLlmSdk(cfg: AppConfig): Anthropic {
   return new Anthropic({
     apiKey,
     baseURL: cfg.LLM_BASE_URL,
+    timeout: cfg.LLM_TIMEOUT_MS,
+    maxRetries: 0,
   });
 }

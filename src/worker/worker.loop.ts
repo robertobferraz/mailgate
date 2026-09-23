@@ -14,14 +14,19 @@ import { WorkerService } from './worker.service';
 
 const RUNS_PER_TICK = 10;
 
-/** Polls on WORKER_POLL_MS. Each tick drains runs, then side tasks (added in F3–F5). */
+/**
+ * Two independent loops on WORKER_POLL_MS: one drains runs, the other the outbox,
+ * inbound replies and expiry. A run inside a long LLM call must not hold up e-mail.
+ */
 @Injectable()
 export class WorkerLoop
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(WorkerLoop.name);
-  private timer?: NodeJS.Timeout;
-  private busy = false;
+  private runsTimer?: NodeJS.Timeout;
+  private sideTimer?: NodeJS.Timeout;
+  private runsBusy = false;
+  private sideBusy = false;
   private lastExpiryAt = 0;
 
   constructor(
@@ -34,16 +39,19 @@ export class WorkerLoop
 
   onApplicationBootstrap(): void {
     if (!this.cfg.WORKER_ENABLED) return;
-    this.timer = setInterval(() => void this.tick(), this.cfg.WORKER_POLL_MS);
+    const ms = this.cfg.WORKER_POLL_MS;
+    this.runsTimer = setInterval(() => void this.tickRuns(), ms);
+    this.sideTimer = setInterval(() => void this.tickSide(), ms);
   }
 
   onApplicationShutdown(): void {
-    if (this.timer) clearInterval(this.timer);
+    if (this.runsTimer) clearInterval(this.runsTimer);
+    if (this.sideTimer) clearInterval(this.sideTimer);
   }
 
-  async tick(): Promise<void> {
-    if (this.busy) return;
-    this.busy = true;
+  async tickRuns(): Promise<void> {
+    if (this.runsBusy) return;
+    this.runsBusy = true;
     try {
       for (
         let i = 0;
@@ -52,6 +60,17 @@ export class WorkerLoop
       ) {
         /* keep draining */
       }
+    } catch (e) {
+      this.logger.error(e instanceof Error ? e.stack : String(e));
+    } finally {
+      this.runsBusy = false;
+    }
+  }
+
+  async tickSide(): Promise<void> {
+    if (this.sideBusy) return;
+    this.sideBusy = true;
+    try {
       await this.outbox.dispatch();
       for (let i = 0; i < 20 && (await this.inbound.processNext()); i++) {
         /* keep draining */
@@ -63,7 +82,7 @@ export class WorkerLoop
     } catch (e) {
       this.logger.error(e instanceof Error ? e.stack : String(e));
     } finally {
-      this.busy = false;
+      this.sideBusy = false;
     }
   }
 }

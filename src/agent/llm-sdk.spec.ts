@@ -21,6 +21,12 @@ describe('createLlmSdk', () => {
     expect(client.apiKey).toBe('k');
     expect(client.baseURL).toBe('https://api.anthropic.com');
   });
+
+  it('bounds each call by LLM_TIMEOUT_MS with no SDK retries, so a call never outlives the lease', () => {
+    const client = createLlmSdk(cfg({ LLM_TIMEOUT_MS: '45000' }));
+    expect(client.timeout).toBe(45000);
+    expect(client.maxRetries).toBe(0);
+  });
 });
 
 describe('isNativeAnthropic', () => {

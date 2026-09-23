@@ -18,7 +18,17 @@ describe('loadConfig', () => {
       LLM_PROVIDER: 'anthropic',
       LLM_MODEL: 'claude-opus-5',
       ANTHROPIC_FALLBACK: 'default',
+      LLM_TIMEOUT_MS: 90000,
     });
+  });
+  it('refuses LLM_TIMEOUT_MS that does not fit inside the lease', () => {
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://x',
+        LEASE_SECONDS: '60',
+        LLM_TIMEOUT_MS: '60000',
+      }),
+    ).toThrow(/LLM_TIMEOUT_MS/);
   });
   it('parses WORKER_ENABLED=false', () => {
     expect(

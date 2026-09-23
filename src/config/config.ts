@@ -23,6 +23,8 @@ const schema = z
     LLM_BASE_URL: z.string().url().optional(),
     LLM_MODEL: z.string().default('claude-opus-5'),
     LLM_API_KEY: z.string().optional(),
+    // per-call bound; the SDK does not retry, the worker's backoff does
+    LLM_TIMEOUT_MS: z.coerce.number().int().min(1000).default(90000),
     ANTHROPIC_FALLBACK: z.enum(['default', 'off']).default('default'),
     AGENTMAIL_API_KEY: z.string().optional(),
     AGENTMAIL_INBOX_ID: z.string().optional(),
@@ -35,6 +37,14 @@ const schema = z
         message:
           'LLM_BASE_URL is required when LLM_PROVIDER=anthropic-compatible',
         path: ['LLM_BASE_URL'],
+      });
+    }
+    // a call that outlives the lease lets another worker reclaim the run mid-call (I4)
+    if (cfg.LLM_TIMEOUT_MS >= cfg.LEASE_SECONDS * 1000) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'LLM_TIMEOUT_MS must be shorter than LEASE_SECONDS',
+        path: ['LLM_TIMEOUT_MS'],
       });
     }
   });

@@ -16,7 +16,7 @@ export class AnthropicLlmClient implements LlmClient {
     @Inject(APP_CONFIG) private readonly cfg: AppConfig,
     @Optional() @Inject(ANTHROPIC_SDK) client?: Anthropic,
   ) {
-    // SDK retries 408/409/429/5xx twice by default; the worker's backoff handles the rest
+    // SDK retries are off (llm-sdk.ts); 408/409/429/5xx go through the worker's backoff
     this.client = client ?? createLlmSdk(this.cfg);
   }
 
