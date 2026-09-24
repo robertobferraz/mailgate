@@ -6,6 +6,7 @@ export type RunEventType =
   | 'CLAIMED'
   | 'LEASE_LOST'
   | 'RETRY_SCHEDULED'
+  | 'RELEASED'
   | 'APPROVAL_REQUESTED'
   | 'APPROVAL_SENT'
   | 'DECISION_RECEIVED'
