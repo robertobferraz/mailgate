@@ -7,6 +7,21 @@ import {
   toInboundEvent,
 } from './mail-provider';
 
+const sendMock = jest.fn().mockResolvedValue({
+  messageId: '<m@agentmail.to>',
+  threadId: 'thr_1',
+});
+
+const replyMock = jest.fn().mockResolvedValue({
+  messageId: '<r@agentmail.to>',
+});
+
+jest.mock('agentmail', () => ({
+  AgentMailClient: jest.fn().mockImplementation(() => ({
+    inboxes: { messages: { send: sendMock, reply: replyMock } },
+  })),
+}));
+
 const SECRET = `whsec_${Buffer.from('mailgate-test-secret-0123456789').toString('base64')}`;
 
 const received = {
@@ -50,6 +65,64 @@ describe('toInboundEvent', () => {
     });
     expect(e.threadId).toBeNull();
     expect(e.text).toBe('aprovo');
+  });
+});
+
+describe('AgentMailProvider.send', () => {
+  it('bounds the SDK call below the outbox send lease (timeout + no SDK retries)', async () => {
+    sendMock.mockClear();
+    const provider = new AgentMailProvider(
+      loadConfig({
+        DATABASE_URL: 'postgresql://x',
+        AGENTMAIL_API_KEY: 'k',
+        AGENTMAIL_INBOX_ID: 'i',
+      }),
+    );
+    await provider.send({
+      to: 'gestor@acme.test',
+      subject: 's',
+      text: 't',
+      html: '<p>t</p>',
+      idempotencyKey: 'approval-1',
+    });
+    expect(sendMock).toHaveBeenCalledWith(
+      'i',
+      { to: 'gestor@acme.test', subject: 's', text: 't', html: '<p>t</p>' },
+      {
+        idempotencyKey: 'approval-1',
+        timeoutInSeconds: 20,
+        maxRetries: 0,
+      },
+    );
+  });
+});
+
+describe('AgentMailProvider.reply', () => {
+  it('bounds the SDK call below the inbound lease (timeout + no SDK retries)', async () => {
+    replyMock.mockClear();
+    const provider = new AgentMailProvider(
+      loadConfig({
+        DATABASE_URL: 'postgresql://x',
+        AGENTMAIL_API_KEY: 'k',
+        AGENTMAIL_INBOX_ID: 'i',
+      }),
+    );
+    await provider.reply({
+      messageId: '<m2@agentmail.to>',
+      text: 't',
+      html: '<p>t</p>',
+      idempotencyKey: 'late-approval-1',
+    });
+    expect(replyMock).toHaveBeenCalledWith(
+      'i',
+      '<m2@agentmail.to>',
+      { text: 't', html: '<p>t</p>' },
+      {
+        idempotencyKey: 'late-approval-1',
+        timeoutInSeconds: 20,
+        maxRetries: 0,
+      },
+    );
   });
 });
 

@@ -95,6 +95,65 @@ describe('ExpiryService', () => {
           where: { providerEventId: 'evt_late' },
         })
       ).outcome,
-    ).toBe('IGNORED_ALREADY_DECIDED');
+    ).toBe('IGNORED_EXPIRED');
+  });
+
+  it('ignores a reply that arrives after expires_at even before the expiry job runs', async () => {
+    const h = buildHarness(prisma);
+    const { run, approval } = await sentApproval(h, prisma);
+    await prisma.$executeRaw`UPDATE approval_requests SET expires_at = now() - interval '1 second' WHERE id = ${approval.id}::uuid`;
+    await h.deliver(
+      'evt_late',
+      replyPayload({
+        threadId: approval.providerThreadId,
+        from: 'gestor@acme.test',
+        text: 'aprovo',
+      }),
+    );
+    await h.inbound.processNext();
+
+    expect(
+      (
+        await prisma.inboundEvent.findUniqueOrThrow({
+          where: { providerEventId: 'evt_late' },
+        })
+      ).outcome,
+    ).toBe('IGNORED_EXPIRED');
+    expect(
+      (
+        await prisma.approvalRequest.findUniqueOrThrow({
+          where: { id: approval.id },
+        })
+      ).status,
+    ).toBe('SENT');
+    expect(
+      (await prisma.run.findUniqueOrThrow({ where: { id: run.id } })).status,
+    ).toBe('WAITING_APPROVAL');
+  });
+
+  it('drains more than one batch in a single expireDue call', async () => {
+    const h = buildHarness(prisma);
+    for (let i = 0; i < 55; i++) {
+      const r = await h.runs.create(validInput());
+      await prisma.run.update({
+        where: { id: r.id },
+        data: { status: 'WAITING_APPROVAL' },
+      });
+      await h.approvals.createIfAbsent(prisma, {
+        runId: r.id,
+        toolUseId: `toolu_${i}`,
+        approverEmail: 'gestor@acme.test',
+        summary: 's',
+        recommendation: 'APPROVE',
+        rationale: 'r',
+        ttlHours: 1,
+      });
+    }
+    await prisma.$executeRaw`UPDATE approval_requests SET expires_at = now() - interval '1 minute'`;
+
+    expect(await h.expiry.expireDue()).toBe(55);
+    expect(
+      await prisma.approvalRequest.count({ where: { status: 'EXPIRED' } }),
+    ).toBe(55);
   });
 });

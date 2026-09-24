@@ -38,10 +38,13 @@ export class AnthropicLlmClient implements LlmClient {
             ...params,
             fallbacks: 'default',
           } as Anthropic.MessageCreateParamsNonStreaming,
-          { headers: { 'anthropic-beta': FALLBACK_BETA } },
+          { headers: { 'anthropic-beta': FALLBACK_BETA }, signal: req.signal },
         );
       }
     }
-    return this.client.messages.create(params);
+    return this.client.messages.create(
+      params,
+      req.signal ? { signal: req.signal } : undefined,
+    );
   }
 }

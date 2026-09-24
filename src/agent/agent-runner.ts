@@ -7,10 +7,10 @@ import { APP_CONFIG } from '../config/config';
 import { PrismaClient } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { Lease, Run } from '../runs/run';
-import { appendRunEvent } from '../runs/run-events';
+import { appendRunEvent, RunEventType } from '../runs/run-events';
 import { RunRepository } from '../runs/run.repository';
 import { AgentStep } from '../worker/agent-step';
-import { PermanentError } from '../worker/errors';
+import { PermanentError, ShutdownAbortError } from '../worker/errors';
 import { LLM_CLIENT } from './llm-client';
 import type { LlmClient } from './llm-client';
 import { buildInitialMessage, buildSystemPrompt } from './prompts';
@@ -23,7 +23,11 @@ import {
 } from './tools';
 
 type ToolOutcome =
-  | { kind: 'result'; result: Anthropic.ToolResultBlockParam }
+  | {
+      kind: 'result';
+      result: Anthropic.ToolResultBlockParam;
+      event?: { type: RunEventType; data: Record<string, unknown> };
+    }
   | { kind: 'paused' };
 
 const errorResult = (
@@ -65,7 +69,7 @@ export class AgentRunner implements AgentStep {
     @Inject(LLM_CLIENT) private readonly llm: LlmClient,
   ) {}
 
-  async run(run: Run, lease: Lease): Promise<void> {
+  async run(run: Run, lease: Lease, signal?: AbortSignal): Promise<void> {
     let messages: Anthropic.MessageParam[] = [...run.messages];
     if (messages.length === 0) {
       messages = [{ role: 'user', content: buildInitialMessage(run.input) }];
@@ -80,7 +84,12 @@ export class AgentRunner implements AgentStep {
         const outcome = await this.executeTool(run, lease, toolUse);
         if (outcome.kind === 'paused') return;
         messages = [...messages, { role: 'user', content: [outcome.result] }];
-        await this.save(lease, messages);
+        await this.runs.saveMessages(
+          lease,
+          messages,
+          this.cfg.LEASE_SECONDS,
+          outcome.event,
+        );
         continue;
       }
 
@@ -88,11 +97,18 @@ export class AgentRunner implements AgentStep {
       if (turns >= this.cfg.MAX_TURNS)
         throw new PermanentError(`max turns (${this.cfg.MAX_TURNS}) exceeded`);
 
-      const response = await this.llm.createMessage({
-        system: buildSystemPrompt(this.cfg.AUTO_APPROVE_LIMIT_CENTS),
-        tools: TOOLS,
-        messages,
-      });
+      let response: Anthropic.Message;
+      try {
+        response = await this.llm.createMessage({
+          system: buildSystemPrompt(this.cfg.AUTO_APPROVE_LIMIT_CENTS),
+          tools: TOOLS,
+          messages,
+          signal,
+        });
+      } catch (e) {
+        if (signal?.aborted) throw new ShutdownAbortError();
+        throw e;
+      }
       if (response.stop_reason === 'refusal')
         throw new PermanentError('model refused the request');
       if (response.stop_reason === 'max_tokens')
@@ -215,10 +231,6 @@ export class AgentRunner implements AgentStep {
     );
 
     if (existing?.status === 'DECIDED') {
-      await appendRunEvent(this.prisma, run.id, 'RESUMED', {
-        approvalId: existing.id,
-        decision: existing.decision,
-      });
       return {
         kind: 'result',
         result: okResult(block.id, {
@@ -226,6 +238,10 @@ export class AgentRunner implements AgentStep {
           note: existing.decisionNote,
           decidedBy: existing.approverEmail,
         }),
+        event: {
+          type: 'RESUMED',
+          data: { approvalId: existing.id, decision: existing.decision },
+        },
       };
     }
     if (existing?.status === 'EXPIRED')

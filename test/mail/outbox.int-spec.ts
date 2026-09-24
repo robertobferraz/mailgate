@@ -69,6 +69,7 @@ describe('OutboxService', () => {
       lastError: 'fake: provider unavailable',
     });
 
+    await prisma.$executeRaw`UPDATE approval_requests SET next_send_at = now() - interval '1 second'`;
     expect(await h.outbox.dispatch()).toBe(1);
     expect(
       (
@@ -77,6 +78,50 @@ describe('OutboxService', () => {
         })
       ).status,
     ).toBe('SENT');
+  });
+
+  it('backs off after a failure: not retried before next_send_at', async () => {
+    const h = buildHarness(prisma);
+    const run = await pausedRun(h);
+    h.mail.failNextSends = 1;
+    await h.outbox.dispatch();
+    const [row] = await prisma.$queryRaw<
+      { send_attempts: number; secs: number }[]
+    >`
+      SELECT send_attempts, EXTRACT(EPOCH FROM next_send_at - now())::float8 AS secs
+        FROM approval_requests WHERE run_id = ${run.id}::uuid`;
+    expect(row.send_attempts).toBe(1);
+    expect(row.secs).toBeGreaterThan(25);
+    expect(row.secs).toBeLessThanOrEqual(30);
+    expect(await h.outbox.dispatch()).toBe(0);
+    expect(h.mail.sent).toHaveLength(0);
+  });
+
+  it('caps the backoff at one hour', async () => {
+    const h = buildHarness(prisma);
+    const run = await pausedRun(h);
+    await prisma.$executeRaw`UPDATE approval_requests SET send_attempts = 12 WHERE run_id = ${run.id}::uuid`;
+    h.mail.failNextSends = 1;
+    await h.outbox.dispatch();
+    const [row] = await prisma.$queryRaw<{ secs: number }[]>`
+      SELECT EXTRACT(EPOCH FROM next_send_at - now())::float8 AS secs FROM approval_requests WHERE run_id = ${run.id}::uuid`;
+    expect(row.secs).toBeGreaterThan(3590);
+    expect(row.secs).toBeLessThanOrEqual(3600);
+  });
+
+  it('never sends a CREATED request whose deadline has passed', async () => {
+    const h = buildHarness(prisma);
+    await pausedRun(h);
+    await prisma.$executeRaw`UPDATE approval_requests SET expires_at = now() - interval '1 second'`;
+    expect(await h.outbox.dispatch()).toBe(0);
+    expect(h.mail.sent).toHaveLength(0);
+  });
+
+  it('expiry skips a row the outbox has reserved', async () => {
+    const h = buildHarness(prisma);
+    await pausedRun(h);
+    await prisma.$executeRaw`UPDATE approval_requests SET send_lease_until = now() + interval '1 minute', expires_at = now() - interval '1 second'`;
+    expect(await h.expiry.expireDue()).toBe(0);
   });
 
   it('a permanently failing older approval does not starve a newer one', async () => {
@@ -101,6 +146,16 @@ describe('OutboxService', () => {
         })
       ).status,
     ).toBe('SENT');
+  });
+
+  it('stops before reserving the next row once shouldStop returns true', async () => {
+    const h = buildHarness(prisma, { cfg: { OUTBOX_BATCH: '10' } });
+    await pausedRun(h);
+    await pausedRun(h);
+    const shouldStop = jest.fn(() => true);
+    expect(await h.outbox.dispatch(shouldStop)).toBe(0);
+    expect(h.mail.sent).toHaveLength(0);
+    expect(shouldStop).toHaveBeenCalled();
   });
 
   it('two concurrent dispatchers deliver one e-mail and mark SENT once', async () => {

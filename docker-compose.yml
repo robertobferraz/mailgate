@@ -28,6 +28,7 @@ services:
       DATABASE_URL: postgresql://mailgate:mailgate@postgres:5432/mailgate
       PORT: "3000"
     ports: ["${API_PORT:-3000}:3000"]
+    stop_grace_period: 15s
     depends_on:
       migrate: { condition: service_completed_successfully }
 volumes:

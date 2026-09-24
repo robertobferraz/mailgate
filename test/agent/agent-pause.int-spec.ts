@@ -1,9 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaClient } from '../../src/generated/prisma/client';
+import { replyPayload } from '../fakes/fake-mail';
 import { endTurn, toolUse } from '../fakes/scripted-llm';
 import { newPrisma, truncateAll } from '../helpers/db';
 import { validInput } from '../helpers/fixtures';
-import { buildHarness } from '../helpers/harness';
+import { buildHarness, sentApproval } from '../helpers/harness';
 
 const ASK = {
   summary: 'Hotel 2 diárias',
@@ -149,5 +150,48 @@ describe('AgentRunner — pause and resume', () => {
     await h.worker.processNextRun();
     expect((await h.runs.findById(small.id))?.status).toBe('COMPLETED');
     expect((await h.runs.findById(big.id))?.status).toBe('WAITING_APPROVAL');
+  });
+
+  it('writes RESUMED once even if the process dies before the resume is saved', async () => {
+    const h = buildHarness(prisma);
+    const { run, approval } = await sentApproval(h, prisma);
+    await h.deliver(
+      'evt_r',
+      replyPayload({
+        threadId: approval.providerThreadId,
+        from: 'gestor@acme.test',
+        text: 'aprovo',
+      }),
+    );
+    await h.inbound.processNext();
+
+    // first resume: crash on the save that carries the tool_result
+    const spy = jest
+      .spyOn(h.runs, 'saveMessages')
+      .mockRejectedValueOnce(new Error('simulated crash'));
+    await h.worker.processNextRun();
+    spy.mockRestore();
+    await prisma.run.update({
+      where: { id: run.id },
+      data: { leaseUntil: new Date(0) },
+    });
+
+    h.llm.push(
+      toolUse('record_decision', {
+        decision: 'APPROVED',
+        reason: 'gestor aprovou',
+      }),
+      endTurn(),
+    );
+    await h.worker.processNextRun();
+
+    expect(
+      await prisma.runEvent.count({
+        where: { runId: run.id, type: 'RESUMED' },
+      }),
+    ).toBe(1);
+    expect(
+      (await prisma.run.findUniqueOrThrow({ where: { id: run.id } })).status,
+    ).toBe('COMPLETED');
   });
 });

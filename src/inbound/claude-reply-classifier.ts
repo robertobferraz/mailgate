@@ -8,12 +8,12 @@ import type { AppConfig } from '../config/config';
 import { APP_CONFIG } from '../config/config';
 import type { Classification, ReplyClassifier } from './reply-classifier';
 
-const schema = z.object({
+export const schema = z.object({
   decision: z.enum(['APPROVED', 'REJECTED', 'UNCLEAR']),
   note: z.string(),
 });
 
-const SYSTEM = [
+export const SYSTEM = [
   'Você classifica a resposta de um gestor a um pedido de aprovação de reembolso.',
   'APPROVED: o gestor aprova claramente (ex.: "aprovo", "pode aprovar", "ok, pode pagar").',
   'REJECTED: o gestor recusa claramente (ex.: "recuso", "não aprovo", "recusa, falta nota fiscal").',
@@ -24,7 +24,7 @@ const SYSTEM = [
 const JSON_ONLY_INSTRUCTION =
   'Responda apenas com um objeto JSON no formato {"decision": "APPROVED"|"REJECTED"|"UNCLEAR", "note": string}, sem nenhum outro texto.';
 
-const UNCLEAR: Classification = {
+export const UNCLEAR: Classification = {
   decision: 'UNCLEAR',
   note: 'classificação indisponível',
 };
@@ -34,7 +34,7 @@ const UNCLEAR: Classification = {
  * surrounding prose: take the substring from the first '{' to the last '}'. Falls back to the
  * raw text (letting JSON.parse throw) when no braces are present.
  */
-function extractJsonObject(text: string): string {
+export function extractJsonObject(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   return start !== -1 && end !== -1 && end > start

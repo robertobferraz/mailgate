@@ -7,7 +7,7 @@ import { RunRepository } from '../runs/run.repository';
  * WAITING_APPROVAL, or throw (the worker applies the retry policy).
  */
 export interface AgentStep {
-  run(run: Run, lease: Lease): Promise<void>;
+  run(run: Run, lease: Lease, signal?: AbortSignal): Promise<void>;
 }
 export const AGENT_STEP = Symbol('AGENT_STEP');
 

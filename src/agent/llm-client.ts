@@ -4,6 +4,7 @@ export interface LlmRequest {
   system: string;
   tools: Anthropic.Tool[];
   messages: Anthropic.MessageParam[];
+  signal?: AbortSignal;
 }
 
 export interface LlmClient {

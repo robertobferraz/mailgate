@@ -10,7 +10,9 @@ export type InboundOutcome =
   | 'IGNORED_UNCLEAR'
   | 'IGNORED_UNKNOWN_THREAD'
   | 'IGNORED_SENDER'
-  | 'IGNORED_ALREADY_DECIDED';
+  | 'IGNORED_ALREADY_DECIDED'
+  | 'IGNORED_EXPIRED'
+  | 'FAILED';
 
 export interface InboundEventRow {
   providerEventId: string;
@@ -65,14 +67,15 @@ export class InboundEventRepository {
       : null;
   }
 
+  /** Sets the terminal outcome once; false when another pass already set one (backlog 0009). */
   async setOutcome(
     db: Db,
     eventId: string,
     outcome: InboundOutcome,
     extra: { approvalRequestId?: string; classification?: string } = {},
-  ): Promise<void> {
-    await db.inboundEvent.update({
-      where: { providerEventId: eventId },
+  ): Promise<boolean> {
+    const { count } = await db.inboundEvent.updateMany({
+      where: { providerEventId: eventId, outcome: null },
       data: {
         outcome,
         processedAt: new Date(),
@@ -81,6 +84,7 @@ export class InboundEventRepository {
         ...extra,
       },
     });
+    return count === 1;
   }
 
   async recordError(eventId: string, error: string): Promise<void> {
@@ -88,5 +92,34 @@ export class InboundEventRepository {
       where: { providerEventId: eventId },
       data: { lastError: error },
     });
+  }
+
+  /** Dead-letter: keep the last error, stop retrying. */
+  async markFailed(eventId: string, error: string): Promise<void> {
+    await this.prisma.inboundEvent.updateMany({
+      where: { providerEventId: eventId, outcome: null },
+      data: {
+        outcome: 'FAILED',
+        lastError: error,
+        leaseUntil: null,
+        processedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Recovers rows that died on their last attempt without ever recording an outcome
+   * (crash, SIGKILL, shutdown, Prisma disconnect — backlog 0009): attempts already at
+   * the max, no live lease, outcome still NULL. Runs on the DB clock (convention 0003).
+   * Returns the number of rows dead-lettered.
+   */
+  async failExhausted(maxAttempts: number): Promise<number> {
+    return this.prisma.$executeRaw`
+      UPDATE inbound_events
+         SET outcome = 'FAILED', processed_at = now(), lease_until = NULL,
+             last_error = COALESCE(last_error, 'attempts exhausted without outcome')
+       WHERE outcome IS NULL
+         AND attempts >= ${maxAttempts}::int
+         AND (lease_until IS NULL OR lease_until < now())`;
   }
 }

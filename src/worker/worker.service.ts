@@ -10,6 +10,7 @@ import { backoffSeconds, classifyError } from './errors';
 @Injectable()
 export class WorkerService {
   private readonly logger = new Logger(WorkerService.name);
+  private inFlight?: AbortController;
 
   constructor(
     @Inject(APP_CONFIG) private readonly cfg: AppConfig,
@@ -33,12 +34,16 @@ export class WorkerService {
       return true;
     }
 
+    const controller = new AbortController();
+    this.inFlight = controller;
     try {
-      await this.agent.run(run, lease);
+      await this.agent.run(run, lease, controller.signal);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const kind = classifyError(e);
-      if (kind === 'lease_lost') {
+      if (kind === 'aborted') {
+        await this.ignoreLeaseLost(() => this.runs.releaseForShutdown(lease));
+      } else if (kind === 'lease_lost') {
         this.logger.warn(message);
       } else if (kind === 'permanent') {
         await this.ignoreLeaseLost(() => this.runs.fail(lease, message));
@@ -47,8 +52,15 @@ export class WorkerService {
           this.runs.scheduleRetry(lease, message, backoffSeconds(run.attempts)),
         );
       }
+    } finally {
+      if (this.inFlight === controller) this.inFlight = undefined;
     }
     return true;
+  }
+
+  /** Signals the in-flight run's AbortSignal so the LLM call rejects and the run is released. */
+  abortInFlight(): void {
+    this.inFlight?.abort();
   }
 
   private async ignoreLeaseLost(fn: () => Promise<void>): Promise<void> {

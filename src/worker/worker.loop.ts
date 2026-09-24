@@ -1,9 +1,9 @@
 import {
+  BeforeApplicationShutdown,
   Inject,
   Injectable,
   Logger,
   OnApplicationBootstrap,
-  OnApplicationShutdown,
 } from '@nestjs/common';
 import { APP_CONFIG } from '../config/config';
 import type { AppConfig } from '../config/config';
@@ -20,13 +20,14 @@ const RUNS_PER_TICK = 10;
  */
 @Injectable()
 export class WorkerLoop
-  implements OnApplicationBootstrap, OnApplicationShutdown
+  implements OnApplicationBootstrap, BeforeApplicationShutdown
 {
   private readonly logger = new Logger(WorkerLoop.name);
   private runsTimer?: NodeJS.Timeout;
   private sideTimer?: NodeJS.Timeout;
-  private runsBusy = false;
-  private sideBusy = false;
+  private stopping = false;
+  private runsInFlight: Promise<void> | null = null;
+  private sideInFlight: Promise<void> | null = null;
   private lastExpiryAt = 0;
 
   constructor(
@@ -44,45 +45,85 @@ export class WorkerLoop
     this.sideTimer = setInterval(() => void this.tickSide(), ms);
   }
 
-  onApplicationShutdown(): void {
+  /**
+   * Drains in-flight work before Prisma disconnects in onApplicationShutdown (adr 0008).
+   * Stops claiming new runs immediately, waits up to SHUTDOWN_GRACE_MS for whatever is
+   * already running, and aborts it if the grace period runs out.
+   */
+  async beforeApplicationShutdown(): Promise<void> {
+    this.stopping = true;
     if (this.runsTimer) clearInterval(this.runsTimer);
     if (this.sideTimer) clearInterval(this.sideTimer);
+    const drained = Promise.allSettled(
+      [this.runsInFlight, this.sideInFlight].filter(
+        (p): p is Promise<void> => p !== null,
+      ),
+    ).then(() => true);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<false>((r) => {
+      timer = setTimeout(() => r(false), this.cfg.SHUTDOWN_GRACE_MS);
+    });
+    const ok = await Promise.race([drained, timeout]);
+    clearTimeout(timer);
+    if (!ok) {
+      this.logger.warn('shutdown grace exceeded; aborting in-flight run');
+      this.worker.abortInFlight();
+      await Promise.race([drained, new Promise((r) => setTimeout(r, 1000))]);
+    }
   }
 
-  async tickRuns(): Promise<void> {
-    if (this.runsBusy) return;
-    this.runsBusy = true;
+  tickRuns(): Promise<void> {
+    if (this.stopping) return Promise.resolve();
+    if (this.runsInFlight) return this.runsInFlight;
+    this.runsInFlight = this.drainRuns().finally(() => {
+      this.runsInFlight = null;
+    });
+    return this.runsInFlight;
+  }
+
+  private async drainRuns(): Promise<void> {
     try {
       for (
         let i = 0;
-        i < RUNS_PER_TICK && (await this.worker.processNextRun());
+        i < RUNS_PER_TICK &&
+        !this.stopping &&
+        (await this.worker.processNextRun());
         i++
       ) {
         /* keep draining */
       }
     } catch (e) {
       this.logger.error(e instanceof Error ? e.stack : String(e));
-    } finally {
-      this.runsBusy = false;
     }
   }
 
-  async tickSide(): Promise<void> {
-    if (this.sideBusy) return;
-    this.sideBusy = true;
+  tickSide(): Promise<void> {
+    if (this.stopping) return Promise.resolve();
+    if (this.sideInFlight) return this.sideInFlight;
+    this.sideInFlight = this.drainSide().finally(() => {
+      this.sideInFlight = null;
+    });
+    return this.sideInFlight;
+  }
+
+  private async drainSide(): Promise<void> {
     try {
-      await this.outbox.dispatch();
-      for (let i = 0; i < 20 && (await this.inbound.processNext()); i++) {
+      await this.outbox.dispatch(() => this.stopping);
+      if (this.stopping) return;
+      for (
+        let i = 0;
+        i < 20 && !this.stopping && (await this.inbound.processNext());
+        i++
+      ) {
         /* keep draining */
       }
+      if (this.stopping) return;
       if (Date.now() - this.lastExpiryAt >= this.cfg.EXPIRY_INTERVAL_MS) {
         this.lastExpiryAt = Date.now(); // scheduling only; expiry itself compares with DB now() (convention 0003)
         await this.expiry.expireDue();
       }
     } catch (e) {
       this.logger.error(e instanceof Error ? e.stack : String(e));
-    } finally {
-      this.sideBusy = false;
     }
   }
 }

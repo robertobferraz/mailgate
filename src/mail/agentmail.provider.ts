@@ -20,6 +20,13 @@ const header = (
   return Array.isArray(v) ? v[0] : v;
 };
 
+// Must stay well under OutboxService's SEND_LEASE_SECONDS (60s, src/mail/outbox.service.ts)
+// and under the inbound processing lease (LEASE_SECONDS, default 120s, src/config/config.ts):
+// the caller's own retry/backoff is the retry mechanism, so the SDK must not retry on our behalf.
+// Reused by both send() and reply().
+const SEND_TIMEOUT_SECONDS = 20;
+const SEND_MAX_RETRIES = 0;
+
 @Injectable()
 export class AgentMailProvider implements MailProvider {
   private readonly client: AgentMailClient;
@@ -43,7 +50,11 @@ export class AgentMailProvider implements MailProvider {
     const res = await this.client.inboxes.messages.send(
       this.inbox(),
       { to: p.to, subject: p.subject, text: p.text, html: p.html },
-      { idempotencyKey: p.idempotencyKey },
+      {
+        idempotencyKey: p.idempotencyKey,
+        timeoutInSeconds: SEND_TIMEOUT_SECONDS,
+        maxRetries: SEND_MAX_RETRIES,
+      },
     );
     return { messageId: res.messageId, threadId: res.threadId };
   }
@@ -53,7 +64,11 @@ export class AgentMailProvider implements MailProvider {
       this.inbox(),
       p.messageId,
       { text: p.text, html: p.html },
-      { idempotencyKey: p.idempotencyKey },
+      {
+        idempotencyKey: p.idempotencyKey,
+        timeoutInSeconds: SEND_TIMEOUT_SECONDS,
+        maxRetries: SEND_MAX_RETRIES,
+      },
     );
     return { messageId: res.messageId };
   }

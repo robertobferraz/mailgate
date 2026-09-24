@@ -9,6 +9,7 @@ import { newSubjectToken } from './subject-token';
 
 export type ApprovalStatus = 'CREATED' | 'SENT' | 'DECIDED' | 'EXPIRED';
 export type Decision = 'APPROVED' | 'REJECTED';
+export type Liveness = 'LIVE' | 'DECIDED' | 'EXPIRED' | 'NOT_SENT';
 
 export interface ApprovalRequest extends Omit<
   ApprovalModel,
@@ -46,6 +47,22 @@ export class ApprovalRepository {
          ${p.summary}, ${p.recommendation}, ${p.rationale}, 'CREATED',
          now() + make_interval(hours => ${p.ttlHours}::int), now(), now())
       ON CONFLICT (run_id, tool_use_id) DO NOTHING`;
+  }
+
+  /** State of a request on the DB clock (convention 0003); lock=true takes FOR UPDATE (I2). */
+  async liveness(db: Db, id: string, lock = false): Promise<Liveness> {
+    const rows = lock
+      ? await db.$queryRaw<{ state: Liveness }[]>`
+          SELECT CASE WHEN status = 'DECIDED' THEN 'DECIDED'
+                      WHEN status = 'EXPIRED' OR expires_at <= now() THEN 'EXPIRED'
+                      WHEN status = 'SENT' THEN 'LIVE' ELSE 'NOT_SENT' END AS state
+            FROM approval_requests WHERE id = ${id}::uuid FOR UPDATE`
+      : await db.$queryRaw<{ state: Liveness }[]>`
+          SELECT CASE WHEN status = 'DECIDED' THEN 'DECIDED'
+                      WHEN status = 'EXPIRED' OR expires_at <= now() THEN 'EXPIRED'
+                      WHEN status = 'SENT' THEN 'LIVE' ELSE 'NOT_SENT' END AS state
+            FROM approval_requests WHERE id = ${id}::uuid`;
+    return rows[0]?.state ?? 'NOT_SENT';
   }
 
   async findByToolUse(

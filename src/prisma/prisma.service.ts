@@ -1,7 +1,7 @@
 import {
   Inject,
   Injectable,
-  OnModuleDestroy,
+  OnApplicationShutdown,
   OnModuleInit,
 } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -12,7 +12,7 @@ import type { AppConfig } from '../config/config';
 @Injectable()
 export class PrismaService
   extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
+  implements OnModuleInit, OnApplicationShutdown
 {
   constructor(@Inject(APP_CONFIG) cfg: AppConfig) {
     // explicit pool: connectionTimeoutMillis defaults to 0 (wait forever) in pg (RESEARCH Q3)
@@ -27,7 +27,8 @@ export class PrismaService
   async onModuleInit(): Promise<void> {
     await this.$connect();
   }
-  async onModuleDestroy(): Promise<void> {
+  // last shutdown phase: WorkerLoop drains in beforeApplicationShutdown first (adr 0008)
+  async onApplicationShutdown(): Promise<void> {
     await this.$disconnect();
   }
 }

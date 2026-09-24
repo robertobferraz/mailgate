@@ -207,4 +207,233 @@ describe('InboundProcessor', () => {
     expect((await h.runs.findById(run.id))?.status).toBe('COMPLETED');
     expect(await prisma.action.count({ where: { runId: run.id } })).toBe(1);
   });
+
+  describe('exact deadline (D008, backlog 0010)', () => {
+    const expireNow = (id: string) =>
+      prisma.$executeRaw`UPDATE approval_requests SET expires_at = now() - interval '1 second' WHERE id = ${id}::uuid`;
+
+    it('a reply past expires_at with the request still SENT ends IGNORED_EXPIRED without classifying', async () => {
+      const h = buildHarness(prisma);
+      const { run, approval } = await sentApproval(h, prisma);
+      await expireNow(approval.id);
+      await h.deliver(
+        'evt_exp_1',
+        replyPayload({
+          threadId: approval.providerThreadId,
+          from: 'gestor@acme.test',
+          text: 'aprovo',
+        }),
+      );
+      await h.inbound.processNext();
+
+      expect(
+        await prisma.inboundEvent.findUniqueOrThrow({
+          where: { providerEventId: 'evt_exp_1' },
+        }),
+      ).toMatchObject({
+        outcome: 'IGNORED_EXPIRED',
+        approvalRequestId: approval.id,
+      });
+      expect(h.classifier.calls).toBe(0);
+      expect(
+        await prisma.approvalRequest.findUniqueOrThrow({
+          where: { id: approval.id },
+        }),
+      ).toMatchObject({ status: 'SENT', decision: null, decidedAt: null });
+      expect(
+        (await prisma.run.findUniqueOrThrow({ where: { id: run.id } })).status,
+      ).toBe('WAITING_APPROVAL');
+    });
+
+    it('a deadline that passes while the classifier runs is caught under the lock', async () => {
+      const h = buildHarness(prisma, { classifierDelayMs: 300 });
+      const { run, approval } = await sentApproval(h, prisma);
+      await h.deliver(
+        'evt_exp_2',
+        replyPayload({
+          threadId: approval.providerThreadId,
+          from: 'gestor@acme.test',
+          text: 'aprovo',
+        }),
+      );
+      const processing = h.inbound.processNext();
+      await new Promise((r) => setTimeout(r, 100));
+      await expireNow(approval.id);
+      await processing;
+
+      expect(h.classifier.calls).toBe(1);
+      expect(
+        (
+          await prisma.inboundEvent.findUniqueOrThrow({
+            where: { providerEventId: 'evt_exp_2' },
+          })
+        ).outcome,
+      ).toBe('IGNORED_EXPIRED');
+      expect(
+        (
+          await prisma.approvalRequest.findUniqueOrThrow({
+            where: { id: approval.id },
+          })
+        ).status,
+      ).toBe('SENT');
+      expect(
+        (await prisma.run.findUniqueOrThrow({ where: { id: run.id } })).status,
+      ).toBe('WAITING_APPROVAL');
+      expect(
+        await prisma.runEvent.count({
+          where: { runId: run.id, type: 'DECISION_RECEIVED' },
+        }),
+      ).toBe(0);
+      expect(h.mail.replies).toHaveLength(1);
+      expect(h.mail.replies[0].text).toContain('Este pedido expirou em');
+      expect(h.mail.replies[0].idempotencyKey).toBe(`late-${approval.id}`);
+    });
+
+    it('an unclear reply whose deadline passes during classification sends no clarification', async () => {
+      const h = buildHarness(prisma, { classifierDelayMs: 300 });
+      const { approval } = await sentApproval(h, prisma);
+      await h.deliver(
+        'evt_exp_3',
+        replyPayload({
+          threadId: approval.providerThreadId,
+          from: 'gestor@acme.test',
+          text: 'vou pensar',
+        }),
+      );
+      const processing = h.inbound.processNext();
+      await new Promise((r) => setTimeout(r, 100));
+      await expireNow(approval.id);
+      await processing;
+
+      expect(h.mail.replies).toHaveLength(0);
+      expect(
+        (
+          await prisma.inboundEvent.findUniqueOrThrow({
+            where: { providerEventId: 'evt_exp_3' },
+          })
+        ).outcome,
+      ).toBe('IGNORED_UNCLEAR');
+      expect(
+        (
+          await prisma.approvalRequest.findUniqueOrThrow({
+            where: { id: approval.id },
+          })
+        ).clarificationSent,
+      ).toBe(false);
+    });
+
+    it('a decision sets decided_at from the DB clock', async () => {
+      const h = buildHarness(prisma);
+      const { approval } = await sentApproval(h, prisma);
+      await h.deliver(
+        'evt_exp_4',
+        replyPayload({
+          threadId: approval.providerThreadId,
+          from: 'gestor@acme.test',
+          text: 'aprovo',
+        }),
+      );
+      await h.inbound.processNext();
+      const [row] = await prisma.$queryRaw<{ ok: boolean }[]>`
+        SELECT decided_at IS NOT NULL AND decided_at <= now() AS ok
+          FROM approval_requests WHERE id = ${approval.id}::uuid`;
+      expect(row.ok).toBe(true);
+    });
+  });
+
+  describe('dead-letter + guarded setOutcome (backlog 0009, D010)', () => {
+    it('dead-letters an event as FAILED once it exhausts MAX_ATTEMPTS', async () => {
+      const h = buildHarness(prisma, {
+        cfg: { MAX_ATTEMPTS: '2', LEASE_SECONDS: '2', LLM_TIMEOUT_MS: '1000' },
+      });
+      const { approval } = await sentApproval(h, prisma);
+      jest
+        .spyOn(h.classifier, 'classify')
+        .mockRejectedValue(new Error('llm down'));
+      await h.deliver(
+        'evt_dead',
+        replyPayload({
+          threadId: approval.providerThreadId,
+          from: 'gestor@acme.test',
+          text: 'aprovo',
+        }),
+      );
+      await h.inbound.processNext();
+      await prisma.inboundEvent.update({
+        where: { providerEventId: 'evt_dead' },
+        data: { leaseUntil: null },
+      });
+      await h.inbound.processNext();
+
+      expect(
+        await prisma.inboundEvent.findUniqueOrThrow({
+          where: { providerEventId: 'evt_dead' },
+        }),
+      ).toMatchObject({ outcome: 'FAILED', lastError: 'llm down' });
+    });
+
+    it('recovers an event stuck past attempts exhaustion (no outcome, expired lease) as FAILED', async () => {
+      const h = buildHarness(prisma, { cfg: { MAX_ATTEMPTS: '2' } });
+      await prisma.inboundEvent.create({
+        data: {
+          providerEventId: 'evt_stuck',
+          payload: {},
+          attempts: 2,
+          leaseUntil: new Date(Date.now() - 1000),
+        },
+      });
+      await prisma.inboundEvent.create({
+        data: {
+          providerEventId: 'evt_live_lease',
+          payload: {},
+          attempts: 2,
+          leaseUntil: new Date(Date.now() + 60_000),
+        },
+      });
+
+      await h.inbound.processNext();
+
+      expect(
+        await prisma.inboundEvent.findUniqueOrThrow({
+          where: { providerEventId: 'evt_stuck' },
+        }),
+      ).toMatchObject({
+        outcome: 'FAILED',
+        lastError: 'attempts exhausted without outcome',
+        leaseUntil: null,
+      });
+      expect(
+        (
+          await prisma.inboundEvent.findUniqueOrThrow({
+            where: { providerEventId: 'evt_live_lease' },
+          })
+        ).outcome,
+      ).toBeNull();
+    });
+
+    it('never overwrites an outcome already recorded', async () => {
+      const h = buildHarness(prisma);
+      await prisma.inboundEvent.create({
+        data: {
+          providerEventId: 'evt_done',
+          payload: {},
+          outcome: 'PROCESSED',
+        },
+      });
+      expect(
+        await h.events.setOutcome(
+          prisma,
+          'evt_done',
+          'IGNORED_ALREADY_DECIDED',
+        ),
+      ).toBe(false);
+      expect(
+        (
+          await prisma.inboundEvent.findUniqueOrThrow({
+            where: { providerEventId: 'evt_done' },
+          })
+        ).outcome,
+      ).toBe('PROCESSED');
+    });
+  });
 });

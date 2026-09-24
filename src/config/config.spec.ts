@@ -56,4 +56,49 @@ describe('loadConfig', () => {
       }),
     ).not.toThrow();
   });
+  it('requires LLM_API_KEY for openai-compatible', () => {
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://x',
+        LLM_PROVIDER: 'openai-compatible',
+      }),
+    ).toThrow(/LLM_API_KEY/);
+  });
+  it('accepts openai-compatible with a key and no base URL', () => {
+    const c = loadConfig({
+      DATABASE_URL: 'postgresql://x',
+      LLM_PROVIDER: 'openai-compatible',
+      LLM_API_KEY: 'k',
+    });
+    expect(c.LLM_PROVIDER).toBe('openai-compatible');
+    expect(c.LLM_STRICT_OUTPUT).toBe(false);
+  });
+  it('rejects SHUTDOWN_GRACE_MS >= 15000 (compose stop_grace_period)', () => {
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://x',
+        SHUTDOWN_GRACE_MS: '15000',
+      }),
+    ).toThrow(/SHUTDOWN_GRACE_MS/);
+  });
+  it('defaults SHUTDOWN_GRACE_MS to 8000', () => {
+    expect(
+      loadConfig({ DATABASE_URL: 'postgresql://x' }).SHUTDOWN_GRACE_MS,
+    ).toBe(8000);
+  });
+  it('rejects DEMO=true in production', () => {
+    expect(() =>
+      loadConfig({
+        DATABASE_URL: 'postgresql://x',
+        DEMO: 'true',
+        NODE_ENV: 'production',
+        AGENTMAIL_WEBHOOK_SECRET: 'whsec_x',
+      }),
+    ).toThrow(/DEMO/);
+  });
+  it('requires AGENTMAIL_WEBHOOK_SECRET in DEMO', () => {
+    expect(() =>
+      loadConfig({ DATABASE_URL: 'postgresql://x', DEMO: 'true' }),
+    ).toThrow(/AGENTMAIL_WEBHOOK_SECRET/);
+  });
 });

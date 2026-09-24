@@ -91,4 +91,34 @@ describe('runs API', () => {
       .get('/runs/not-a-uuid')
       .expect(400);
   });
+
+  describe('GET /runs/:id/timeline', () => {
+    it('renders escaped HTML with a strict CSP', async () => {
+      const created = await request(app.getHttpServer() as App)
+        .post('/runs')
+        .send(validInput({ description: `<script>alert('x')</script>` }))
+        .expect(201);
+      const createRes = created.body as { id: string };
+      const res = await request(app.getHttpServer() as App)
+        .get(`/runs/${createRes.id}/timeline`)
+        .expect(200);
+      expect(res.headers['content-type']).toMatch(/text\/html; charset=utf-8/);
+      expect(res.headers['content-security-policy']).toContain(
+        "default-src 'none'",
+      );
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+      expect(res.text).not.toContain('<script>');
+      expect(res.text).toContain('&lt;script&gt;');
+      expect(res.text).not.toContain('gestor@acme.test');
+      expect(res.text).toContain('http-equiv="refresh"');
+    });
+    it('404s an unknown run and 400s a non-uuid', async () => {
+      await request(app.getHttpServer() as App)
+        .get('/runs/5f0c6b8e-2b0a-4c47-9d5f-0e7d2b8a1c3d/timeline')
+        .expect(404);
+      await request(app.getHttpServer() as App)
+        .get('/runs/nope/timeline')
+        .expect(400);
+    });
+  });
 });

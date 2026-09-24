@@ -13,12 +13,26 @@ export class ExpiryService {
     private readonly runs: RunRepository,
   ) {}
 
-  /** Expires CREATED/SENT requests past expires_at and their runs, atomically (D013). */
+  /** Expires due requests batch by batch until a batch comes back short (backlog 0010). */
   async expireDue(): Promise<number> {
+    let total = 0;
+    for (;;) {
+      const n = await this.expireBatch();
+      total += n;
+      if (n < BATCH) return total;
+    }
+  }
+
+  /**
+   * Expires one batch of CREATED/SENT requests past expires_at and their runs, atomically (D013).
+   * A CREATED row the outbox holds under send_lease_until is skipped until the lease lapses.
+   */
+  private expireBatch(): Promise<number> {
     return this.prisma.$transaction(async (tx) => {
       const due = await tx.$queryRaw<{ id: string; run_id: string }[]>`
         SELECT id, run_id FROM approval_requests
          WHERE status IN ('CREATED','SENT') AND expires_at < now()
+           AND (status = 'SENT' OR send_lease_until IS NULL OR send_lease_until < now())
          ORDER BY expires_at
          FOR UPDATE SKIP LOCKED
          LIMIT ${BATCH}::int`;

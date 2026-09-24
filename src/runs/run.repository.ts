@@ -4,7 +4,7 @@ import { Prisma, PrismaClient } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { Db } from '../prisma/db';
 import { ReimbursementInput } from './reimbursement-input';
-import { appendRunEvent } from './run-events';
+import { appendRunEvent, RunEventType } from './run-events';
 import {
   LeaseLostError,
   Lease,
@@ -71,12 +71,18 @@ export class RunRepository {
     lease: Lease,
     messages: Anthropic.MessageParam[],
     leaseSeconds: number,
+    event?: { type: RunEventType; data: Record<string, unknown> },
   ): Promise<void> {
-    const n = await this.prisma.$executeRaw`
-      UPDATE runs SET messages = ${JSON.stringify(messages)}::jsonb,
-             lease_until = now() + make_interval(secs => ${leaseSeconds}::float8), updated_at = now()
-       WHERE id = ${lease.runId}::uuid AND lease_token = ${lease.token}::uuid AND status = 'RUNNING'`;
-    if (n === 0) throw new LeaseLostError(lease.runId);
+    const write = async (db: Db) => {
+      const n = await db.$executeRaw`
+        UPDATE runs SET messages = ${JSON.stringify(messages)}::jsonb,
+               lease_until = now() + make_interval(secs => ${leaseSeconds}::float8), updated_at = now()
+         WHERE id = ${lease.runId}::uuid AND lease_token = ${lease.token}::uuid AND status = 'RUNNING'`;
+      if (n === 0) throw new LeaseLostError(lease.runId);
+      if (event) await appendRunEvent(db, lease.runId, event.type, event.data);
+    };
+    if (!event) return write(this.prisma);
+    await this.prisma.$transaction((tx) => write(tx));
   }
 
   async complete(lease: Lease): Promise<void> {
@@ -118,6 +124,18 @@ export class RunRepository {
         error,
         delaySeconds,
       });
+    });
+  }
+
+  /** Shutdown abort: hand the run back without consuming the attempt (adr 0008). */
+  async releaseForShutdown(lease: Lease): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const n = await tx.$executeRaw`
+        UPDATE runs SET status = 'PENDING', lease_token = NULL, lease_until = NULL,
+               attempts = GREATEST(attempts - 1, 0), updated_at = now()
+         WHERE id = ${lease.runId}::uuid AND lease_token = ${lease.token}::uuid AND status = 'RUNNING'`;
+      if (n === 0) throw new LeaseLostError(lease.runId);
+      await appendRunEvent(tx, lease.runId, 'RELEASED');
     });
   }
 
