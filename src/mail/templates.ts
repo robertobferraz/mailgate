@@ -1,5 +1,14 @@
 import { CATEGORY_LABEL, Category } from '../runs/reimbursement-input';
 import { formatBRL, formatDeadline } from './format';
+import {
+  ACCENT,
+  ACCENT_TINT,
+  FONT,
+  INK,
+  MUTED,
+  RULE,
+  escapeHtml,
+} from '../shared/html';
 
 export const SUBJECT_TOKEN_RE = /\[mailgate #([a-z2-7]{8})\]/i;
 
@@ -25,26 +34,6 @@ const INSTRUCTION =
   'Responda este e-mail com APROVO ou RECUSO (pode incluir um comentário).';
 const CLARIFICATION =
   'Não consegui entender sua resposta. Responda apenas APROVO ou RECUSO.';
-
-// E-mail-safe design tokens: inline styles only, no external CSS/fonts.
-// Restrained palette (PRODUCT.md): near-black ink, one functional accent
-// reserved for the amount and the reply instruction, muted secondary text
-// that still clears WCAG AA (>=4.5:1) on both white and the accent tint.
-const FONT =
-  "system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
-const INK = '#1a1a1a'; // primary text, ~17.5:1 on white
-const MUTED = '#55606e'; // secondary text (labels, footer, deadline), ~6.4:1 on white
-const ACCENT = '#1d4ed8'; // functional accent: amount + reply instruction, ~6.7:1 on white
-const ACCENT_TINT = '#eef2ff'; // pale background for accent blocks
-const RULE = '#e5e7eb'; // hairline divider
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 /** Hidden inbox-preview snippet (inbox list only; invisible once the e-mail is open). */
 function preheader(text: string): string {
@@ -130,4 +119,55 @@ export function renderClarificationEmail(): { text: string; html: string } {
     text: `${CLARIFICATION}\n\n— mailgate`,
     html,
   };
+}
+
+export interface LateReplyData {
+  state: 'APPROVED' | 'REJECTED' | 'EXPIRED';
+  at: Date;
+  note: string | null;
+}
+
+const LATE_LABEL = { APPROVED: 'APROVADO', REJECTED: 'RECUSADO' } as const;
+
+export function renderLateReplyEmail(d: LateReplyData): {
+  text: string;
+  html: string;
+} {
+  const when = formatDeadline(d.at);
+  const lines =
+    d.state === 'EXPIRED'
+      ? [
+          `Este pedido expirou em ${when} (horário de Brasília), sem resposta a tempo.`,
+          'Sua resposta não foi registrada. Se ainda for preciso, peça ao solicitante um novo pedido.',
+        ]
+      : [
+          `Este pedido já foi ${LATE_LABEL[d.state]} em ${when} (horário de Brasília).`,
+          'Sua resposta não alterou a decisão.',
+        ];
+  const note = d.note ? `Comentário registrado: ${d.note}` : null;
+  const text = [...lines, ...(note ? ['', note] : []), '', '— mailgate'].join(
+    '\n',
+  );
+  const status = d.state === 'EXPIRED' ? 'EXPIRADO' : LATE_LABEL[d.state];
+  const whenLabel = d.state === 'EXPIRED' ? 'Expirou em' : 'Decidido em';
+  const html = shell(
+    [
+      preheader(lines[0]),
+      statusBlock('Situação do pedido', status),
+      `<tr><td style="padding-top:20px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse">${detailsRow(whenLabel, `${when} (horário de Brasília)`)}</table></td></tr>`,
+      `<tr><td style="padding-top:20px">${escapeHtml(lines[0])}<br>${escapeHtml(lines[1])}</td></tr>`,
+      d.note ? noteBlock('Comentário registrado', d.note) : '',
+      footerRow(),
+    ].join(''),
+  );
+  return { text, html };
+}
+
+/** First row of the late reply. Same vocabulary as amountBlock, but the value stays in ink: the accent is reserved for amount + reply instruction. */
+function statusBlock(label: string, value: string): string {
+  return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:${ACCENT_TINT};border-radius:8px"><tr><td style="padding:14px 16px"><span style="display:block;font-size:12px;color:${MUTED}">${escapeHtml(label)}</span><span style="display:block;font-size:20px;line-height:1.3;font-weight:700;color:${INK};padding-top:2px">${escapeHtml(value)}</span></td></tr></table></td></tr>`;
+}
+
+function noteBlock(label: string, note: string): string {
+  return `<tr><td style="padding-top:20px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${RULE};border-radius:8px;border-collapse:separate"><tr><td style="padding:12px 16px"><span style="display:block;font-size:12px;color:${MUTED}">${escapeHtml(label)}</span><span style="display:block;color:${INK}">${escapeHtml(note)}</span></td></tr></table></td></tr>`;
 }

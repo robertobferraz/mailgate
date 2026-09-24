@@ -1,6 +1,7 @@
 import {
   renderApprovalEmail,
   renderClarificationEmail,
+  renderLateReplyEmail,
   SUBJECT_TOKEN_RE,
 } from './templates';
 
@@ -70,5 +71,48 @@ describe('renderClarificationEmail', () => {
     expect(font).toBeTruthy();
     expect(clarificationHtml).toContain(`font-family:${font}`);
     expect(clarificationHtml).toContain('— mailgate');
+  });
+});
+
+describe('renderLateReplyEmail', () => {
+  const at = new Date('2026-09-24T17:30:00Z'); // 14:30 in Brasília
+  it('tells the approver the request was already approved, with date and note', () => {
+    const r = renderLateReplyEmail({
+      state: 'APPROVED',
+      at,
+      note: 'ok, pode pagar',
+    });
+    expect(r.text).toContain('Este pedido já foi APROVADO em 24/09/2026');
+    expect(r.text).toContain('Sua resposta não alterou a decisão.');
+    expect(r.text).toContain('ok, pode pagar');
+    expect(r.html).toContain('APROVADO');
+  });
+  it('tells the approver the request expired', () => {
+    const r = renderLateReplyEmail({ state: 'EXPIRED', at, note: null });
+    expect(r.text).toContain('Este pedido expirou em 24/09/2026');
+    expect(r.text).toContain('Sua resposta não foi registrada.');
+  });
+  it('escapes the note in HTML', () => {
+    const r = renderLateReplyEmail({
+      state: 'REJECTED',
+      at,
+      note: `<b>'x'</b>`,
+    });
+    expect(r.html).toContain('&lt;b&gt;&#39;x&#39;&lt;/b&gt;');
+    expect(r.html).not.toContain('<b>');
+  });
+  it('shows the request status in its own block', () => {
+    const r = renderLateReplyEmail({ state: 'EXPIRED', at, note: null });
+    expect(r.html).toContain('Situação do pedido');
+    expect(r.html).toContain('EXPIRADO');
+  });
+  it('labels the note instead of prefixing it in HTML', () => {
+    const r = renderLateReplyEmail({
+      state: 'APPROVED',
+      at,
+      note: 'ok, pode pagar',
+    });
+    expect(r.html).not.toContain('Comentário registrado: ');
+    expect(r.html).toContain('ok, pode pagar');
   });
 });
