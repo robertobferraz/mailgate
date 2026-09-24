@@ -11,5 +11,6 @@
 - 0009 active · outbox reserves the row and backs off failing sends
 - 0010 active · OpenAI-compatible LLM adapter over chat.completions
 - 0011 active · Prisma CLI audit findings: override mysql2, accept deepmerge-ts
-- 0012 active · DEMO mode with fake LLM/mail and real webhook signature
+- 0012 superseded by 0014 · DEMO mode with fake LLM/mail and real webhook signature
 - 0013 active · deploy on Northflank Developer Sandbox
+- 0014 active · DEMO mode, with both GIFs recorded by Playwright + gifski

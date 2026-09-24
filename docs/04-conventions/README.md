@@ -5,3 +5,4 @@
 - 0003 time logic uses the database clock
 - 0004 no network calls inside database transactions
 - 0005 Claude history is append-only
+- 0006 external calls made under a lease are bounded below the lease

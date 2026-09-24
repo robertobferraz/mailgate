@@ -1,0 +1,7 @@
+# 0014 — DEMO mode, with both GIFs recorded by Playwright + gifski
+date:     2026-09-24
+status:   active
+context:  adr 0012 chose VHS for the terminal GIF. On the recording host, vhs 0.12.0 (headless Chrome 153, macOS) exits 0 without capturing a single frame, even with its own default template. Registering DemoModule through a dynamic `register()` also failed: it runs when app.module is imported, before a test sets DEMO. Supersedes 0012.
+decision: DEMO=true swaps the LLM, the classifier and outgoing mail for the implementations in src/demo, while inbound keeps AgentMail's svix verification. DEMO is rejected when NODE_ENV=production and requires AGENTMAIL_WEBHOOK_SECRET. DemoModule is always registered, and GET /demo/outbox returns 404 unless the mail provider is the demo one. Both GIFs are recorded by Playwright + gifski: scripts/record-terminal.ts replays the real output of scripts/demo-run.sh in an HTML terminal, and scripts/record-timeline.ts screenshots the timeline page. scripts/record-demo.sh orchestrates both and fails if either GIF is missing or empty.
+consequences: recording needs docker, gifski, jq and Playwright chromium. vhs and ffmpeg are not needed. The terminal GIF is a rendering of the real script output rather than a real TTY capture. /demo/outbox exists in every build's route table, but outside DEMO it always returns 404.
+source:   workstream f6-hardening w5 · contract D016 · preflight ruling on T14

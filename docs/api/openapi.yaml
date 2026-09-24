@@ -37,6 +37,16 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RunView' } } } }
         '400': { description: Id is not a UUID }
         '404': { description: Not found }
+  /runs/{id}/timeline:
+    get:
+      operationId: getRunTimeline
+      summary: Timeline page as HTML with auto-refresh
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: OK, content: { text/html: { schema: { type: string } } } }
+        '400': { description: Id is not a UUID }
+        '404': { description: Not found }
   /webhooks/mail:
     post:
       operationId: mailWebhook

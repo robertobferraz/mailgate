@@ -14,6 +14,18 @@
 
 **Durable human-in-the-loop for AI agents, by e-mail.**
 
+## Demo
+
+<p align="center">
+  <img src="docs/assets/demo-terminal.gif" alt="Terminal recording: a run is created, waits for approval, and completes once the approver replies." width="800">
+</p>
+
+<p align="center">
+  <img src="docs/assets/demo-timeline.gif" alt="Browser recording of the GET /runs/:id/timeline page, showing the run's events from creation to completion." width="800">
+</p>
+
+Live demo: `set after deploy`
+
 An agent works on a task, reaches a decision it is not allowed to make alone, e-mails a person, and stops. When the reply lands — minutes or two days later, after any number of restarts or deploys — the agent picks up exactly where it left off and acts on the decision. Nothing waits in memory, and no worker is held while the human thinks.
 
 The demo domain is expense reimbursement:
@@ -106,6 +118,8 @@ curl localhost:3000/health  # {"status":"ok"}
 
 Port 3000 taken? `API_PORT=3001 docker compose up --build`.
 
+Recording the demo: `npm run demo:record` (needs `docker`, `gifski`, `jq`, and Playwright's chromium — `npx playwright install chromium`).
+
 Create a run:
 
 ```bash
@@ -129,15 +143,18 @@ For replies to reach mailgate, point the AgentMail webhook at a public URL for `
 |---|---|---|
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `WORKER_ENABLED` | `true` | run the worker loops in this process |
-| `LLM_PROVIDER` | `anthropic` | `anthropic`, or `anthropic-compatible` (e.g. Ollama) with `LLM_BASE_URL` |
-| `LLM_MODEL` | `claude-opus-5` | model id |
-| `LLM_API_KEY` | — | API key for the provider |
+| `LLM_PROVIDER` | `anthropic` | `anthropic`, `anthropic-compatible` (e.g. Ollama) with `LLM_BASE_URL`, or `openai-compatible` (e.g. Groq/OpenAI) with `LLM_API_KEY` |
+| `LLM_MODEL` | `claude-opus-5` | model id; must be set explicitly when `LLM_PROVIDER=openai-compatible` (the default `claude-opus-5` is Anthropic-only) |
+| `LLM_API_KEY` | — | API key for the provider; required when `LLM_PROVIDER=openai-compatible` |
+| `LLM_STRICT_OUTPUT` | `false` | `openai-compatible` only: use strict `json_schema` response mode for reply classification |
 | `LLM_TIMEOUT_MS` | `90000` | per-call bound; must stay below `LEASE_SECONDS` |
 | `AGENTMAIL_API_KEY` / `AGENTMAIL_INBOX_ID` | — | outbound mail |
 | `AGENTMAIL_WEBHOOK_SECRET` | — | Svix secret; without it every webhook is rejected |
 | `AUTO_APPROVE_LIMIT_CENTS` | `50000` | amount the agent may approve alone (R$ 500,00) |
 | `APPROVAL_TTL_HOURS` | `48` | how long an approval waits before expiring |
 | `LEASE_SECONDS` / `MAX_ATTEMPTS` / `MAX_TURNS` | `120` / `5` / `10` | worker lease, retry budget, agent turn cap |
+| `SHUTDOWN_GRACE_MS` | `8000` | how long shutdown waits for the in-flight worker tick to finish before exiting; must stay below the compose `stop_grace_period` (15s) |
+| `DEMO` | `false` | swaps in a fake LLM, a keyword classifier and in-memory outgoing mail for recording the demo; webhooks are still verified by real Svix signatures, so `AGENTMAIL_WEBHOOK_SECRET` is still required; refused when `NODE_ENV=production` |
 
 All variables are validated at startup ([`src/config/config.ts`](src/config/config.ts)).
 
@@ -167,7 +184,17 @@ npm run lint && npm run typecheck
 - **E-mail is not strong identity.** A forged sender who knows the approver's address and the subject token could pass as the approver. SPF/DKIM checks would be the next step in a real deployment.
 - **The classifier can misread.** It defaults to `UNCLEAR` when in doubt, asks at most once, and stores the original text with every decision.
 - **No auth on the API.** Multi-tenancy, login and an admin panel are out of scope for this demo.
+- **The timeline page is public and masks the approver e-mail** (`g***@domain.com`); the JSON API is unchanged and still returns it in full — see [pdr 0006](docs/03-pdr/0006-timeline-page-masks-personal-data.md).
+- **One high `npm audit` finding is accepted**: `deepmerge-ts`, pulled in transitively by the Prisma CLI — see [adr 0011](docs/02-adr/0011-npm-audit-prisma-cli-findings.md).
+
+## Deploy
+
+See [docs/deploy.md](docs/deploy.md) for the full Northflank deploy guide (Postgres addon, service config, env, webhook registration, smoke test).
 
 ## Status
 
-Phases F0–F5 are done: foundation, runs and worker, agent, outbound mail, inbound webhook, expiry. Validated end to end against the real AgentMail API. F6 (public deploy, timeline page) is next — see [backlog 0001](docs/00-backlog/0001-f6-demo-and-publication.md).
+F0–F6 done: foundation, runs and worker, agent, outbound mail, inbound webhook, expiry, hardening and public deploy guide. Validated end to end against the real AgentMail API.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
